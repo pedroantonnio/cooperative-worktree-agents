@@ -1,0 +1,28 @@
+﻿# OS / editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Runtime / generated
+*.tmp
+*.temp
+*.log
+*.zip
+*.sha256
+
+# Publisher scripts MUST stay outside this repository.
+publish*.ps1
+*publisher*.ps1
+
+# Local coordination/runtime state, if ever created inside the tree.
+codex-team/
+.cwa/

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cooperative Worktree Agents"
+  short_description: "Coordinate parallel Codex agents with Git worktrees"
+  default_prompt: "Coordinate this task as an independent worktree agent, share durable context with peer agents, and integrate it safely into the staging domain."
