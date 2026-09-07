@@ -51,11 +51,31 @@ By default, the helper keeps task worktrees outside the project checkout under a
 
 This prevents task worktrees from appearing as untracked project directories.
 
-## Never implement in the target checkout
+A task worktree contains only files present in the selected target commit. If the cooperative skill is installed in the primary checkout as an untracked directory or nested Git repository, it will not appear inside the generated task worktree. This is expected.
 
-The target checkout exists for serialized integration only. It must remain clean between integrations.
+The start command returns absolute helper_path and skill_root values so the task can continue using the same helper with --repo pointing at its worktree.
 
-If the user is manually editing the checkout where `staging` is checked out, integration must stop until that working tree is clean or the user establishes a dedicated integration checkout.
+## Git metadata permissions
+
+git worktree add must create a task branch ref and worktree administration metadata inside the repository common Git directory.
+
+In a managed sandbox, write permission to normal project files does not imply write permission to .git.
+
+If task creation fails with cannot lock ref, a refs/heads lock path, and Permission denied, request elevated or user-approved execution for the exact cooperative helper command.
+
+Do not bypass the failure by editing the target checkout, inventing a branch outside the ledger, or disabling the one-task one-worktree invariant.
+
+## Primary folder is the final authoritative checkout
+
+Never implement directly in the target checkout. Task and candidate worktrees are temporary.
+
+The configured primary project folder is different: it is the location where the final integrated target must be visible after integration finishes.
+
+If that primary folder contains preexisting work, CWA parks and verifies that work in a preservation worktree, performs integration separately, then returns the integrated target to the primary folder.
+
+Therefore a finished task must never leave the newest product state only inside a task, candidate, or temporary integration worktree.
+
+A non-primary target worktree with unknown dirty changes still blocks integration until ownership is resolved.
 
 ## Do not switch branches inside an owned worktree
 

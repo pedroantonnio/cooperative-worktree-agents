@@ -776,3 +776,13 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 ## License
 
 MIT License. See [`LICENSE`](LICENSE).
+
+## Primary checkout lifecycle
+
+Task and candidate worktrees are temporary. The configured primary project folder is the authoritative location for the finished integrated target.
+
+When integration starts with preexisting work in the primary folder, CWA preserves staged, unstaged, and non-tooling untracked state in a verified preservation worktree. It does not use stash and does not discard that work.
+
+After candidate validation succeeds, CWA advances the target and returns that target branch and exact integrated SHA to the primary project folder. The agent must then run cleanup from the primary folder for the integrated task before reporting completion.
+
+A task is not operationally finished when its code exists only in an isolated worktree.

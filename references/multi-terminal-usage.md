@@ -28,7 +28,9 @@ Each agent:
 7. waits only for the integration mutex, not for unrelated implementation;
 8. integrates itself;
 9. resolves integration conflicts using peer context;
-10. marks itself integrated.
+10. verifies that the integrated target has been handed back to the configured primary project folder;
+11. runs mandatory cleanup for its task and candidate worktrees from the primary folder;
+12. only then reports final completion.
 
 ## No central scheduler
 
@@ -57,6 +59,32 @@ A Codex session can call `start` from the repository checkout. The helper return
 From that point the agent must treat that path as the only implementation root. Shell commands should use `cd <path>` or helper `--repo <path>`. Editing tools should target files under that worktree, not the original checkout.
 
 If the user's Codex CLI setup supports starting with a working-directory option, an alternative is to bootstrap the task/worktree first and launch Codex directly in the returned worktree.
+
+If the generated worktree does not contain the cooperative skill because the installation is untracked or a nested repository, continue invoking the helper from the absolute helper_path returned by start and pass --repo with the task worktree.
+
+If cwa.py start fails with cannot lock ref, a refs/heads lock path, and Permission denied, the Codex sandbox is blocking Git metadata writes. Request elevated or user-approved execution for that exact CWA operation. Never fall back to implementing in the shared checkout.
+
+To see what cooperative agents are doing and where they are working, run:
+
+python ABSOLUTE_CWA_PATH --repo PRIMARY_CHECKOUT status
+
+For machine-readable owner, branch, worktree and claims, run:
+
+python ABSOLUTE_CWA_PATH --repo PRIMARY_CHECKOUT status --json
+
+This is the preferred source of truth instead of inferring task ownership from process IDs.
+
+## Dirty primary checkout is not a reason to stop
+
+An integration refusal is not permission for the terminal to give up.
+
+The nested cooperative skill is ignored as local tooling when appropriate.
+
+Preexisting work in the configured primary project folder is automatically copied into a preservation worktree and verified before the primary folder is cleared for integration. CWA does not stash or commit that work.
+
+After the candidate is validated and integrated, the target is handed back to the primary folder. The agent then runs cleanup from that primary folder and only after cleanup reports completion.
+
+Unknown dirty changes in a separate non-primary target worktree remain a safety block and must be reported rather than discarded.
 
 ## Watching peers
 

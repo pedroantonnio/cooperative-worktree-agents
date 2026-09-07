@@ -28,6 +28,39 @@ class CWAError(RuntimeError):
     pass
 
 
+def git_failure_guidance(cmd: List[str], detail: str) -> str:
+    lower = detail.lower().replace(chr(92), "/")
+    joined = " ".join(cmd).lower()
+
+    permission_denied = (
+        "permission denied" in lower
+        or "access is denied" in lower
+        or "operation not permitted" in lower
+    )
+
+    git_metadata_write = (
+        "cannot lock ref" in lower
+        or ".git/refs/" in lower
+        or "refs/heads/" in lower
+        or "worktree add" in joined
+    )
+
+    if permission_denied and git_metadata_write:
+        return (
+            detail
+            + "\n\n"
+            + "CWA diagnosis: the current execution context cannot write Git metadata. "
+            + "This commonly happens in a managed Codex sandbox where project files are writable "
+            + "but the repository common .git directory is read-only. "
+            + "Do NOT bypass the cooperative protocol by editing the shared or target checkout. "
+            + "Re-run the exact same CWA command using the host execution tool's elevated or "
+            + "user-approved mode that permits Git metadata writes. "
+            + "This is an execution-tool permission, not a cwa.py flag."
+        )
+
+    return detail
+
+
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -37,6 +70,7 @@ def run_git(repo: Path, *args: str, check: bool = True, capture: bool = True) ->
     p = subprocess.run(cmd, text=True, capture_output=capture)
     if check and p.returncode != 0:
         detail = (p.stderr or p.stdout or "").strip()
+        detail = git_failure_guidance(cmd, detail)
         raise CWAError(f"Git command failed ({' '.join(cmd)}): {detail}")
     return p
 
@@ -317,14 +351,74 @@ def current_branch(repo: Path) -> str:
     return git_out(repo, "branch", "--show-current")
 
 
-def is_clean(repo: Path, ignore_marker: bool = True) -> bool:
+def external_helper_relpath(repo: Path) -> Optional[str]:
+    """Return the untracked nested helper path when CWA lives inside this repository.
+
+    A nested cooperative-worktree-agents repository is operational tooling,
+    not task source. Its presence in the primary checkout must not make the
+    integration target appear dirty forever.
+    """
+    primary = primary_worktree(repo)
+    helper_root = Path(__file__).resolve().parent.parent
+    try:
+        rel = helper_root.relative_to(primary).as_posix().rstrip("/")
+    except ValueError:
+        return None
+
+    tracked = run_git(primary, "ls-files", "--error-unmatch", "--", rel, check=False)
+    if tracked.returncode == 0:
+        return None
+
+    if not helper_root.exists():
+        return None
+
+    return rel
+
+
+def status_lines(repo: Path, ignore_marker: bool = True, ignore_external_helper: bool = True) -> List[str]:
     out = git_out(repo, "status", "--porcelain")
     if not out:
-        return True
+        return []
+
     lines = out.splitlines()
+
     if ignore_marker:
         lines = [ln for ln in lines if not ln.endswith(".codex-agent.json")]
-    return not lines
+
+    if ignore_external_helper:
+        helper_rel = external_helper_relpath(repo)
+        if helper_rel:
+            kept = []
+            for line in lines:
+                if line.startswith("?? "):
+                    path = line[3:].replace(chr(92), "/").rstrip("/")
+                    if path == helper_rel or path.startswith(helper_rel + "/"):
+                        continue
+                kept.append(line)
+            lines = kept
+
+    return lines
+
+
+def is_clean(repo: Path, ignore_marker: bool = True, ignore_external_helper: bool = True) -> bool:
+    return not status_lines(
+        repo,
+        ignore_marker=ignore_marker,
+        ignore_external_helper=ignore_external_helper,
+    )
+
+
+def dirty_target_error(repo: Path) -> CWAError:
+    lines = status_lines(repo)
+    detail = "\n".join(lines) if lines else "(no non-tooling changes detected)"
+    return CWAError(
+        f"Target worktree is dirty: {repo}\n"
+        f"Blocking status:\n{detail}\n\n"
+        "This is a recoverable integration block, not task completion or abandonment. "
+        "The task remains ready for integration. Do not stash, reset, discard, or overwrite "
+        "changes that may belong to the user or another agent. Once the target checkout is clean, "
+        "rerun the same integrate-begin command and continue the normal candidate validation flow."
+    )
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -403,7 +497,13 @@ def cmd_start(args: argparse.Namespace) -> None:
         "base_sha": base_sha,
         "target_branch": target,
         "worktree_path": str(wt_path),
-        "next": f"Continue all implementation inside {wt_path}",
+        "helper_path": str(Path(__file__).resolve()),
+        "skill_root": str(Path(__file__).resolve().parent.parent),
+        "next": (
+            f"Continue all implementation inside {wt_path}. "
+            f"If the skill is absent there, invoke CWA with the absolute helper path "
+            f"{Path(__file__).resolve()} and pass --repo for the task worktree."
+        ),
     }, indent=2))
 
 
@@ -635,8 +735,240 @@ def get_or_create_target_worktree(repo: Path, project: Dict[str, Any], target: s
     return path
 
 
+def project_primary_worktree(repo: Path, project: Optional[Dict[str, Any]] = None) -> Path:
+    if project is None and project_path(repo).exists():
+        project = load_project(repo)
+    if project and project.get("primary_worktree"):
+        return Path(project["primary_worktree"]).resolve()
+    return primary_worktree(repo)
+
+
+def git_bytes(repo: Path, *args: str) -> bytes:
+    cmd = ["git", "-C", str(repo), *args]
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if p.returncode != 0:
+        detail = p.stderr.decode("utf-8", errors="replace").strip()
+        detail = git_failure_guidance(cmd, detail)
+        raise CWAError(f"Git command failed ({' '.join(cmd)}): {detail}")
+    return p.stdout
+
+
+def apply_git_patch(repo: Path, patch: bytes, index: bool) -> None:
+    if not patch:
+        return
+    cmd = ["git", "-C", str(repo), "apply", "--binary"]
+    if index:
+        cmd.append("--index")
+    cmd.append("-")
+    p = subprocess.run(cmd, input=patch, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if p.returncode != 0:
+        detail = p.stderr.decode("utf-8", errors="replace").strip()
+        raise CWAError(f"Could not reproduce preserved primary changes in {repo}: {detail}")
+
+
+def untracked_files(repo: Path) -> List[str]:
+    raw = git_bytes(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    values = raw.decode("utf-8", errors="surrogateescape").split(chr(0))
+    helper_rel = external_helper_relpath(repo)
+    result: List[str] = []
+    for value in values:
+        if not value:
+            continue
+        rel = value.replace(chr(92), "/")
+        if rel == ".codex-agent.json":
+            continue
+        if helper_rel and (rel == helper_rel or rel.startswith(helper_rel + "/")):
+            continue
+        result.append(rel)
+    return result
+
+
+def copy_untracked_files(source: Path, destination: Path, paths: List[str]) -> None:
+    for rel in paths:
+        src = source / Path(rel)
+        dst = destination / Path(rel)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_symlink():
+            target = os.readlink(src)
+            if dst.exists() or dst.is_symlink():
+                dst.unlink()
+            os.symlink(target, dst)
+        elif src.is_file():
+            shutil.copy2(src, dst)
+
+
+def remove_copied_untracked_files(source: Path, paths: List[str]) -> None:
+    parents = set()
+    for rel in paths:
+        path = source / Path(rel)
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+        parent = path.parent
+        while parent != source and source in parent.parents:
+            parents.add(parent)
+            parent = parent.parent
+    for parent in sorted(parents, key=lambda p: len(p.parts), reverse=True):
+        try:
+            parent.rmdir()
+        except OSError:
+            pass
+
+
+def park_primary_changes(
+    repo: Path,
+    project: Dict[str, Any],
+    target: str,
+    reason: str,
+) -> Optional[Dict[str, Any]]:
+    primary = project_primary_worktree(repo, project)
+    dirty_before = status_lines(primary)
+    if not dirty_before:
+        return None
+
+    original_branch = current_branch(primary)
+    original_head = rev(primary, "HEAD")
+    token = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    preserve_root = Path(project["worktree_root"]).resolve() / "_preserved"
+    preserve_root.mkdir(parents=True, exist_ok=True)
+    preserve_wt = (preserve_root / f"primary-{token}").resolve()
+
+    created_branch = False
+    if original_branch and original_branch != target:
+        preserve_branch = original_branch
+    else:
+        preserve_branch = f"wip/cwa-preserved-primary-{token}"
+        run_git(primary, "branch", preserve_branch, original_head)
+        created_branch = True
+
+    staged_patch = git_bytes(primary, "diff", "--cached", "--binary", "--no-ext-diff")
+    unstaged_patch = git_bytes(primary, "diff", "--binary", "--no-ext-diff")
+    untracked = untracked_files(primary)
+
+    try:
+        run_git(primary, "worktree", "add", "--detach", str(preserve_wt), original_head)
+        apply_git_patch(preserve_wt, staged_patch, index=True)
+        apply_git_patch(preserve_wt, unstaged_patch, index=False)
+        copy_untracked_files(primary, preserve_wt, untracked)
+
+        if git_bytes(preserve_wt, "diff", "--cached", "--binary", "--no-ext-diff") != staged_patch:
+            raise CWAError("Preserved staged diff does not exactly match the primary staged diff.")
+        if git_bytes(preserve_wt, "diff", "--binary", "--no-ext-diff") != unstaged_patch:
+            raise CWAError("Preserved unstaged diff does not exactly match the primary unstaged diff.")
+        if status_lines(preserve_wt) != dirty_before:
+            raise CWAError(
+                "Preserved primary status does not exactly match the original primary status. "
+                "The primary checkout was not modified."
+            )
+
+        run_git(primary, "restore", "--staged", "--worktree", "--", ".")
+        remove_copied_untracked_files(primary, untracked)
+
+        if not is_clean(primary):
+            raise CWAError(
+                "Primary preservation copy succeeded, but the primary checkout still contains "
+                "non-tooling changes. Refusing to continue automatically."
+            )
+
+        if not original_branch or original_branch == target:
+            run_git(primary, "switch", preserve_branch)
+
+        record = {
+            "reason": reason,
+            "original_branch": original_branch,
+            "original_head": original_head,
+            "preservation_branch": preserve_branch,
+            "preservation_worktree": str(preserve_wt),
+            "created_preservation_branch": created_branch,
+            "status_snapshot": dirty_before,
+            "preserved_at": now_iso(),
+        }
+        return record
+    except Exception:
+        if preserve_wt.exists():
+            run_git(primary, "worktree", "remove", "--force", str(preserve_wt), check=False)
+        if created_branch:
+            run_git(primary, "branch", "-D", preserve_branch, check=False)
+        raise
+
+
+def attach_preserved_primary_worktrees(
+    repo: Path,
+    preservations: List[Dict[str, Any]],
+) -> None:
+    for item in preservations:
+        path = Path(item["preservation_worktree"]).resolve()
+        branch = item["preservation_branch"]
+        if not path.exists():
+            raise CWAError(f"Preserved primary worktree disappeared: {path}")
+        if current_branch(path) != branch:
+            run_git(path, "switch", branch)
+
+
+def cwa_managed_integration_worktree(project: Dict[str, Any], path: Path) -> bool:
+    root = (Path(project["worktree_root"]).resolve() / "_integration").resolve()
+    try:
+        path.resolve().relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def handoff_target_to_primary(
+    repo: Path,
+    project: Dict[str, Any],
+    target: str,
+    integrated_sha: str,
+    record: Dict[str, Any],
+) -> Dict[str, Any]:
+    primary = project_primary_worktree(repo, project)
+    preservations = list(record.get("primary_preservations") or [])
+
+    if primary.resolve() != (find_target_worktree(repo, target) or primary).resolve():
+        if not is_clean(primary):
+            late = park_primary_changes(
+                repo,
+                project,
+                target,
+                "Changes appeared in the primary checkout while integration was running",
+            )
+            if late:
+                preservations.append(late)
+                record["primary_preservations"] = preservations
+                atomic_write_json(integration_record_path(repo, record["task_id"]), record)
+
+    active_target_wt = find_target_worktree(repo, target)
+
+    if active_target_wt and active_target_wt.resolve() != primary.resolve():
+        if not is_clean(active_target_wt):
+            raise dirty_target_error(active_target_wt)
+        run_git(active_target_wt, "switch", "--detach", integrated_sha)
+
+    if current_branch(primary) != target:
+        run_git(primary, "switch", target)
+
+    if current_branch(primary) != target or rev(primary, "HEAD") != integrated_sha:
+        raise CWAError(
+            "Primary handoff failed: the configured primary project folder is not on the "
+            "integrated target SHA. Integration is not complete and the mutex remains held."
+        )
+
+    attach_preserved_primary_worktrees(repo, preservations)
+
+    if active_target_wt and active_target_wt.resolve() != primary.resolve():
+        if cwa_managed_integration_worktree(project, active_target_wt) and active_target_wt.exists():
+            run_git(primary, "worktree", "remove", str(active_target_wt))
+
+    return {
+        "primary_worktree": str(primary),
+        "primary_branch": current_branch(primary),
+        "primary_head": rev(primary, "HEAD"),
+        "preservations": preservations,
+    }
+
+
 def unresolved_files(repo: Path) -> List[str]:
     return [x for x in git_out(repo, "diff", "--name-only", "--diff-filter=U").splitlines() if x]
+
 
 
 def cmd_integrate_begin(args: argparse.Namespace) -> None:
@@ -653,10 +985,21 @@ def cmd_integrate_begin(args: argparse.Namespace) -> None:
     ensure_safe_target(repo, target)
     project = load_project(repo)
     acquire_lock(repo, agent_id, task_id, target)
+
+    primary_preservations: List[Dict[str, Any]] = []
     try:
+        parked = park_primary_changes(
+            repo,
+            project,
+            target,
+            "Primary checkout contained preexisting work when integration began",
+        )
+        if parked:
+            primary_preservations.append(parked)
+
         target_wt = get_or_create_target_worktree(repo, project, target)
         if not is_clean(target_wt):
-            raise CWAError(f"Target worktree is dirty: {target_wt}")
+            raise dirty_target_error(target_wt)
         target_sha = rev(target_wt, "HEAD")
         if target_sha != rev(repo, target):
             raise CWAError("Target worktree HEAD does not match target branch ref.")
@@ -679,6 +1022,8 @@ def cmd_integrate_begin(args: argparse.Namespace) -> None:
             "candidate_branch": candidate_branch,
             "candidate_worktree": str(candidate_wt),
             "task_branch": task["task_branch"],
+            "primary_worktree": str(project_primary_worktree(repo, project)),
+            "primary_preservations": primary_preservations,
             "started_at": now_iso(),
             "status": "MERGING",
             "conflict_files": [],
@@ -693,29 +1038,61 @@ def cmd_integrate_begin(args: argparse.Namespace) -> None:
             atomic_write_json(integration_record_path(repo, task_id), record)
             task["status"] = "CONFLICT"
             save_task(repo, task)
-            journal(repo, agent_id, task_id, "warning", "Integration candidate has merge conflicts", files=conflicts,
-                    extra={"candidate_worktree": str(candidate_wt), "target_sha_before": target_sha})
+            journal(
+                repo,
+                agent_id,
+                task_id,
+                "warning",
+                "Integration candidate has merge conflicts",
+                files=conflicts,
+                extra={"candidate_worktree": str(candidate_wt), "target_sha_before": target_sha},
+            )
         elif p.returncode == 0:
             record["status"] = "INTEGRATION_VALIDATION"
             atomic_write_json(integration_record_path(repo, task_id), record)
             task["status"] = "INTEGRATION_VALIDATION"
             save_task(repo, task)
-            journal(repo, agent_id, task_id, "integration_note", "Task merged cleanly into candidate; combined-state validation required",
-                    extra={"candidate_worktree": str(candidate_wt), "target_sha_before": target_sha})
+            journal(
+                repo,
+                agent_id,
+                task_id,
+                "integration_note",
+                "Task merged cleanly into candidate; combined-state validation required",
+                extra={"candidate_worktree": str(candidate_wt), "target_sha_before": target_sha},
+            )
         else:
             record["status"] = "INTEGRATION_ERROR"
             record["merge_stderr"] = (p.stderr or "").strip()
             atomic_write_json(integration_record_path(repo, task_id), record)
             task["status"] = "INTEGRATION_ERROR"
             save_task(repo, task)
-            journal(repo, agent_id, task_id, "warning", "Integration merge command failed outside normal conflict handling",
-                    extra={"candidate_worktree": str(candidate_wt), "stderr": record["merge_stderr"]})
+            journal(
+                repo,
+                agent_id,
+                task_id,
+                "warning",
+                "Integration merge command failed outside normal conflict handling",
+                extra={"candidate_worktree": str(candidate_wt), "stderr": record["merge_stderr"]},
+            )
 
         print(json.dumps(record, indent=2))
     except Exception:
-        # If candidate was never established, do not strand the mutex.
         rec_path = integration_record_path(repo, task_id)
         if not rec_path.exists():
+            try:
+                recovery_record = {
+                    "task_id": task_id,
+                    "primary_preservations": primary_preservations,
+                }
+                handoff_target_to_primary(
+                    repo,
+                    project,
+                    target,
+                    rev(repo, target),
+                    recovery_record,
+                )
+            except Exception:
+                pass
             try:
                 release_lock(repo, agent_id, task_id)
             except Exception:
@@ -728,6 +1105,7 @@ def merge_in_progress(repo: Path) -> bool:
     return p.returncode == 0
 
 
+
 def cmd_integrate_finish(args: argparse.Namespace) -> None:
     repo = resolve_repo(args.repo)
     agent_id, task_id, marker = identity(repo)
@@ -738,50 +1116,117 @@ def cmd_integrate_finish(args: argparse.Namespace) -> None:
     record = read_json(integration_record_path(repo, task_id))
     if Path(record["candidate_worktree"]).resolve() != repo:
         raise CWAError("This is not the recorded candidate worktree.")
+
+    if not args.test:
+        raise CWAError(
+            "integrate-finish requires at least one verified combined-state test result. "
+            "Record PASS only after observing the native command exit code."
+        )
+
     conflicts = unresolved_files(repo)
     if conflicts:
         raise CWAError(f"Unresolved conflict files remain: {conflicts}")
     if merge_in_progress(repo):
-        # Complete a resolved conflicted merge if the index is ready.
         p = run_git(repo, "commit", "--no-edit", check=False)
         if p.returncode != 0:
             raise CWAError(f"Resolved merge is not committed: {(p.stderr or p.stdout).strip()}")
     if not is_clean(repo):
         raise CWAError("Candidate worktree is dirty. Commit the intended conflict resolution before finishing.")
 
-    target_wt = Path(record["target_worktree"]).resolve()
-    if not target_wt.exists():
-        raise CWAError(f"Target worktree disappeared: {target_wt}")
-    if not is_clean(target_wt):
-        raise CWAError(f"Target worktree is dirty: {target_wt}")
-    current_target = rev(target_wt, "HEAD")
-    if current_target != record["target_sha_before"] or rev(target_wt, task["target_branch"]) != record["target_sha_before"]:
-        raise CWAError(
-            "Target moved after candidate creation. Do not force it. Abort this integration and retry from current target state."
-        )
+    project = load_project(repo)
     candidate_head = rev(repo, "HEAD")
-    p = run_git(repo, "merge-base", "--is-ancestor", record["target_sha_before"], candidate_head, check=False)
+    before = record["target_sha_before"]
+    target = task["target_branch"]
+    target_ref = rev(repo, target)
+
+    p = run_git(repo, "merge-base", "--is-ancestor", before, candidate_head, check=False)
     if p.returncode != 0:
         raise CWAError("Candidate does not descend from recorded target SHA.")
 
-    run_git(target_wt, "merge", "--ff-only", record["candidate_branch"])
-    integrated_sha = rev(target_wt, "HEAD")
+    if target_ref == before:
+        target_wt = Path(record["target_worktree"]).resolve()
+        if not target_wt.exists():
+            target_wt = get_or_create_target_worktree(repo, project, target)
+            record["target_worktree"] = str(target_wt)
+            atomic_write_json(integration_record_path(repo, task_id), record)
+
+        if not is_clean(target_wt):
+            raise dirty_target_error(target_wt)
+        if rev(target_wt, "HEAD") != before or rev(target_wt, target) != before:
+            raise CWAError(
+                "Target moved after candidate creation. Do not force it. "
+                "Abort this integration and retry from current target state."
+            )
+        run_git(target_wt, "merge", "--ff-only", record["candidate_branch"])
+        target_ref = rev(repo, target)
+    elif target_ref != candidate_head:
+        raise CWAError(
+            "Target moved after candidate creation. Do not force it. "
+            "Abort this integration and retry from current target state."
+        )
+
+    if target_ref != candidate_head:
+        raise CWAError("Target did not advance to the validated candidate HEAD.")
+
+    handoff = handoff_target_to_primary(
+        repo,
+        project,
+        target,
+        candidate_head,
+        record,
+    )
+
     task["status"] = "INTEGRATED"
-    task["integration_sha"] = integrated_sha
-    task["integration_verification"] = args.test or []
+    task["integration_sha"] = candidate_head
+    task["integration_verification"] = args.test
     task["integrated_at"] = now_iso()
     save_task(repo, task)
+
     record["status"] = "INTEGRATED"
     record["candidate_head"] = candidate_head
-    record["integrated_sha"] = integrated_sha
-    record["verification"] = args.test or []
+    record["integrated_sha"] = candidate_head
+    record["verification"] = args.test
+    record["primary_handoff"] = handoff
     record["finished_at"] = now_iso()
     atomic_write_json(integration_record_path(repo, task_id), record)
-    journal(repo, agent_id, task_id, "integration_note", "Validated candidate advanced the target branch",
-            files=task.get("changed_files", []), extra={"integrated_sha": integrated_sha, "verification": args.test or []})
+
+    journal(
+        repo,
+        agent_id,
+        task_id,
+        "integration_note",
+        "Validated candidate advanced the target and the integrated target was returned to the primary project folder",
+        files=task.get("changed_files", []),
+        extra={
+            "integrated_sha": candidate_head,
+            "verification": args.test,
+            "primary_worktree": handoff["primary_worktree"],
+        },
+    )
     release_lock(repo, agent_id, task_id)
-    print(json.dumps({"task_id": task_id, "status": "INTEGRATED", "target_branch": task["target_branch"],
-                      "integrated_sha": integrated_sha, "candidate_worktree": str(repo)}, indent=2))
+
+    primary = handoff["primary_worktree"]
+    helper = str(Path(__file__).resolve())
+    print(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "status": "INTEGRATED",
+                "target_branch": target,
+                "integrated_sha": candidate_head,
+                "primary_worktree": primary,
+                "primary_branch": handoff["primary_branch"],
+                "primary_head": handoff["primary_head"],
+                "preserved_preexisting_work": handoff["preservations"],
+                "next": (
+                    f"Integration is visible in the primary project folder {primary}. "
+                    f"Before reporting completion, run cleanup from the primary folder with: "
+                    f"python {helper} --repo {primary} cleanup --task {task_id}"
+                ),
+            },
+            indent=2,
+        )
+    )
 
 
 def cmd_integrate_abort(args: argparse.Namespace) -> None:
@@ -857,24 +1302,86 @@ def cmd_abandon(args: argparse.Namespace) -> None:
     print(json.dumps({"task_id": task_id, "status": "ABANDONED", "reason": args.reason}, indent=2))
 
 
+
 def cmd_cleanup(args: argparse.Namespace) -> None:
     repo = resolve_repo(args.repo)
-    agent_id, task_id, marker = identity(repo)
-    if marker.get("role") != "task":
-        raise CWAError("Cleanup from the task worktree.")
+    project = load_project(repo)
+    anchor = project_primary_worktree(repo, project)
+
+    if repo.resolve() != anchor.resolve():
+        raise CWAError(
+            f"Run cleanup from the configured primary project folder: {anchor}. "
+            "This avoids deleting the worktree that owns the current shell."
+        )
+
+    task_id = args.task
+    if not task_id:
+        try:
+            _, task_id, _ = identity(repo)
+        except CWAError as e:
+            raise CWAError("cleanup requires --task when run from the primary project folder.") from e
+
     task = load_task(repo, task_id)
     if task.get("status") != "INTEGRATED":
         raise CWAError("Task must be INTEGRATED before cleanup.")
-    if not is_clean(repo):
-        raise CWAError("Task worktree is dirty; refusing cleanup.")
-    anchor = primary_worktree(repo)
-    p = run_git(anchor, "merge-base", "--is-ancestor", task["task_branch"], task["target_branch"], check=False)
+
+    target = task["target_branch"]
+    if current_branch(anchor) != target:
+        raise CWAError(
+            f"Primary folder must be on integrated target {target} before cleanup; "
+            f"found {current_branch(anchor)}."
+        )
+
+    p = run_git(anchor, "merge-base", "--is-ancestor", task["task_branch"], target, check=False)
     if p.returncode != 0:
         raise CWAError("Task branch is not confirmed as integrated into target.")
-    wt = Path(task["worktree_path"]).resolve()
-    run_git(anchor, "worktree", "remove", str(wt))
-    run_git(anchor, "branch", "-d", task["task_branch"])
-    print(json.dumps({"task_id": task_id, "removed_worktree": str(wt), "deleted_branch": task["task_branch"]}, indent=2))
+
+    removed = []
+
+    record_path = integration_record_path(anchor, task_id)
+    if record_path.exists():
+        record = read_json(record_path)
+        candidate_wt = Path(record.get("candidate_worktree", "")).resolve()
+        candidate_branch = record.get("candidate_branch")
+        if candidate_wt.exists():
+            if not is_clean(candidate_wt):
+                raise CWAError(f"Candidate worktree is dirty; refusing cleanup: {candidate_wt}")
+            if merge_in_progress(candidate_wt):
+                raise CWAError(f"Candidate worktree still has a merge in progress: {candidate_wt}")
+            run_git(anchor, "worktree", "remove", str(candidate_wt))
+            removed.append(str(candidate_wt))
+        if candidate_branch and local_branch_exists(anchor, candidate_branch):
+            run_git(anchor, "branch", "-d", candidate_branch)
+
+    task_wt = Path(task["worktree_path"]).resolve()
+    if task_wt.exists():
+        if not is_clean(task_wt):
+            raise CWAError(f"Task worktree is dirty; refusing cleanup: {task_wt}")
+        run_git(anchor, "worktree", "remove", str(task_wt))
+        removed.append(str(task_wt))
+
+    if local_branch_exists(anchor, task["task_branch"]):
+        run_git(anchor, "branch", "-d", task["task_branch"])
+
+    task["cleaned_at"] = now_iso()
+    task["cleanup_complete"] = True
+    save_task(anchor, task)
+
+    print(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "status": "INTEGRATED",
+                "cleanup_complete": True,
+                "primary_worktree": str(anchor),
+                "target_branch": target,
+                "target_head": rev(anchor, "HEAD"),
+                "removed_worktrees": removed,
+                "final": "Task lifecycle complete. Final integrated code is in the primary project folder.",
+            },
+            indent=2,
+        )
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -925,7 +1432,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("integrate-begin", help="Acquire mutex and merge task into a candidate worktree")
     s.set_defaults(func=cmd_integrate_begin)
 
-    s = sub.add_parser("integrate-finish", help="Advance target to a validated candidate")
+    s = sub.add_parser("integrate-finish", help="Advance target, return it to primary, and require verified evidence")
     s.add_argument("--test", action="append", default=[])
     s.set_defaults(func=cmd_integrate_finish)
 
@@ -944,7 +1451,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--reason", required=True)
     s.set_defaults(func=cmd_abandon)
 
-    s = sub.add_parser("cleanup", help="Remove an already integrated task worktree/branch")
+    s = sub.add_parser("cleanup", help="Remove integrated task/candidate worktrees after primary handoff")
+    s.add_argument("--task")
     s.set_defaults(func=cmd_cleanup)
 
     return p

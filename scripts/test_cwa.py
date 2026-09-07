@@ -7,9 +7,18 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import importlib.util
 
 HERE = Path(__file__).resolve().parent
 CWA = HERE / "cwa.py"
+
+
+def load_cwa_module():
+    spec = importlib.util.spec_from_file_location("cwa_under_test", CWA)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run(cmd, cwd=None, check=True):
@@ -144,10 +153,124 @@ def test_full_flow_and_conflict():
         assert st2["integration_lock"] is None
 
 
-def main():
-    test_full_flow_and_conflict()
-    print("PASS: cooperative worktree flow, protected target, transactional integration, and conflict resolution")
+def test_git_metadata_permission_guidance():
+    module = load_cwa_module()
+    detail = (
+        "fatal: cannot lock ref "
+        "'refs/heads/task/t-test': Unable to create "
+        "'C:/repo/.git/refs/heads/task/t-test.lock': Permission denied"
+    )
+    guided = module.git_failure_guidance(
+        ["git", "-C", "C:/repo", "worktree", "add", "-b", "task/t-test"],
+        detail,
+    )
+    assert "managed Codex sandbox" in guided
+    assert "Do NOT bypass" in guided
+    assert "user-approved mode" in guided
+    assert "not a cwa.py flag" in guided
 
+    ordinary = "fatal: branch missing not found"
+    assert module.git_failure_guidance(["git", "show", "missing"], ordinary) == ordinary
+
+
+
+def test_dirty_primary_is_parked_and_final_code_returns_to_primary():
+    with tempfile.TemporaryDirectory(prefix="cwa-primary-handoff-") as td:
+        root = Path(td) / "repo"
+        root.mkdir()
+        git(root, "init", "-b", "master")
+        git(root, "config", "user.name", "CWA Test")
+        git(root, "config", "user.email", "cwa@example.invalid")
+        (root / "base.txt").write_text("base\n", encoding="utf-8")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "initial")
+        git(root, "branch", "staging")
+        git(root, "switch", "staging")
+
+        _, init = cwa(root, "init", "--target", "staging")
+        assert Path(init["primary_worktree"]).resolve() == root.resolve()
+
+        _, task = cwa(
+            root,
+            "start",
+            "--title",
+            "Primary handoff",
+            "--objective",
+            "Verify final code returns to primary",
+            "--claim",
+            "feature.txt",
+            "--acceptance",
+            "feature exists in primary",
+        )
+        task_wt = Path(task["worktree_path"])
+        commit_file(task_wt, "feature.txt", "integrated\n", "feature")
+        cwa(task_wt, "ready", "--test", "task verification: PASS")
+
+        (root / "base.txt").write_text("user staged change\n", encoding="utf-8")
+        git(root, "add", "base.txt")
+        (root / "notes.local").write_text("keep me\n", encoding="utf-8")
+
+        source_cached = git(root, "diff", "--cached", "--binary").stdout
+        source_status = git(root, "status", "--porcelain").stdout
+
+        _, begin = cwa(task_wt, "integrate-begin")
+        assert begin["status"] == "INTEGRATION_VALIDATION"
+        assert len(begin["primary_preservations"]) == 1
+
+        preserved_info = begin["primary_preservations"][0]
+        preserved = Path(preserved_info["preservation_worktree"])
+        preserved_branch = preserved_info["preservation_branch"]
+
+        assert preserved.exists()
+        assert git(preserved, "diff", "--cached", "--binary").stdout == source_cached
+        assert git(preserved, "status", "--porcelain").stdout == source_status
+        assert (preserved / "notes.local").read_text(encoding="utf-8") == "keep me\n"
+
+        candidate = Path(begin["candidate_worktree"])
+
+        missing_evidence, _ = cwa(candidate, "integrate-finish", check=False)
+        assert missing_evidence.returncode != 0
+        assert "requires at least one verified combined-state test result" in missing_evidence.stderr
+
+        _, finish = cwa(
+            candidate,
+            "integrate-finish",
+            "--test",
+            "combined validation native exit code 0: PASS",
+        )
+
+        assert finish["status"] == "INTEGRATED"
+        assert Path(finish["primary_worktree"]).resolve() == root.resolve()
+        assert git(root, "branch", "--show-current").stdout.strip() == "staging"
+        assert git(root, "rev-parse", "HEAD").stdout.strip() == finish["integrated_sha"]
+        assert git(root, "show", "HEAD:feature.txt").stdout == "integrated\n"
+        assert git(root, "status", "--porcelain").stdout == ""
+
+        assert git(preserved, "branch", "--show-current").stdout.strip() == preserved_branch
+        assert git(preserved, "diff", "--cached", "--binary").stdout == source_cached
+        assert git(preserved, "status", "--porcelain").stdout == source_status
+        assert (preserved / "notes.local").read_text(encoding="utf-8") == "keep me\n"
+
+        wrong_cleanup, _ = cwa(task_wt, "cleanup", "--task", task["task_id"], check=False)
+        assert wrong_cleanup.returncode != 0
+        assert "configured primary project folder" in wrong_cleanup.stderr
+
+        _, cleaned = cwa(root, "cleanup", "--task", task["task_id"])
+        assert cleaned["cleanup_complete"] is True
+        assert not task_wt.exists()
+        assert not candidate.exists()
+        assert git(root, "branch", "--show-current").stdout.strip() == "staging"
+        assert git(root, "show", "HEAD:feature.txt").stdout == "integrated\n"
+
+
+def main():
+    test_git_metadata_permission_guidance()
+    test_full_flow_and_conflict()
+    test_dirty_primary_is_parked_and_final_code_returns_to_primary()
+    print(
+        "PASS: cooperative worktree flow, primary handoff, dirty-work preservation, "
+        "mandatory cleanup, protected target, transactional integration, and conflict resolution"
+    )
 
 if __name__ == "__main__":
     main()

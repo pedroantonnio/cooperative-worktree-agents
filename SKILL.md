@@ -82,9 +82,65 @@ python <skill-root>/scripts/cwa.py start \
   --acceptance "Existing password login still works"
 ```
 
-The command returns a unique `agent_id`, `task_id`, task branch, base SHA, and worktree path.
+The command returns a unique agent_id, task_id, task branch, base SHA, worktree path, helper_path, and skill_root.
 
-After task registration, treat the returned worktree as your execution root. If the current Codex process cannot change its own workspace root, use absolute paths under that worktree and prefix shell commands with `cd <worktree>` or use the helper's `--repo <worktree>` option. Never edit the original checkout for task implementation.
+After task registration, treat the returned worktree as your execution root. If the current Codex process cannot change its own workspace root, use absolute paths under that worktree and prefix shell commands by changing directory to the worktree or use the helper with --repo pointing to the worktree. Never edit the original checkout for task implementation.
+
+### Codex managed sandbox Git permission errors
+
+Creating a task branch and worktree requires writes inside the repository common Git directory, including refs/heads lock files and worktree administration metadata.
+
+Some Codex managed sandboxes allow ordinary source-file writes but expose the common .git directory as read-only.
+
+The characteristic error contains all of the following:
+
+fatal: cannot lock ref refs/heads/...
+Unable to create a .git/refs/heads/...lock file
+Permission denied
+
+When this happens:
+
+1. Do not implement in the shared or target checkout.
+2. Do not bypass CWA with ad-hoc Git branch or worktree commands.
+3. Re-run the exact same cwa.py start command using the Codex execution tool elevated or user-approved mode that permits Git metadata writes.
+4. Elevation is a permission of the execution tool, not a cwa.py command-line flag.
+5. Once start succeeds, continue exclusively inside the returned task worktree.
+
+The helper emits explicit recovery guidance when this failure signature is detected.
+
+### Primary checkout preservation and automatic recovery
+
+The configured primary project folder is the authoritative finished checkout. Task worktrees and candidate worktrees are temporary implementation and integration areas.
+
+If the primary folder contains preexisting tracked or untracked user work when integration begins, the helper must not abandon the task and must not require the user to manually clean the folder first.
+
+The helper automatically:
+
+1. snapshots staged changes, unstaged changes, and non-tooling untracked files;
+2. reproduces them in a dedicated preserved worktree under the configured worktree root;
+3. verifies the preserved staged diff, unstaged diff, and status before changing the primary folder;
+4. clears only the exact changes that were successfully reproduced;
+5. continues integration against a clean target checkout;
+6. after successful validation, returns the integrated target branch and exact integrated SHA to the configured primary project folder;
+7. attaches the preserved worktree to its preservation branch so the previous user work remains available separately.
+
+No automatic stash is used. Unknown work is never discarded. A preservation mismatch fails closed before the primary checkout is cleared.
+
+A task is not complete merely because a task branch or candidate contains the code. Successful integration must end with the primary project folder on the target branch at the integrated SHA.
+
+### Skill directory can be absent from a generated task worktree
+
+A Git worktree contains files committed in the selected target revision.
+
+If cooperative-worktree-agents is installed in the primary checkout as an untracked directory or as a nested Git repository, the generated task worktree will not contain the skill directory. That is expected.
+
+Use the absolute helper_path returned by start and pass --repo with the task worktree path.
+
+Example:
+
+python C:/Programacao/Uncuty/.agents/SKILLS/cooperative-worktree-agents/scripts/cwa.py --repo C:/path/to/task-worktree status
+
+The shared ledger still works because it lives in the repository common Git directory.
 
 Read `references/task-lifecycle.md` for the full state machine.
 
@@ -180,6 +236,10 @@ python <skill-root>/scripts/cwa.py --repo <task-worktree> ready \
 ```
 
 Do not claim a test passed unless you observed it pass.
+
+For native commands, observe the real process exit code. In PowerShell, ErrorActionPreference does not by itself turn a failing native executable into a terminating PowerShell error. Agents must inspect the native exit status or use an execution wrapper that fails on a nonzero native exit code. Output text that merely contains a command invocation is not PASS evidence.
+
+integrate-finish requires at least one combined-state verification entry.
 
 The helper records the task HEAD and changed files. A dirty worktree cannot become ready.
 
@@ -298,21 +358,24 @@ Read `references/recovery-and-takeover.md`.
 
 ## Completion and cleanup
 
-After successful integration, the task is complete when:
+After successful integration, the task may be reported complete only when:
 
-- the target contains the integrated task commit/candidate commit;
-- required verification is recorded;
-- the task status is `INTEGRATED`;
+- the target contains the validated candidate;
+- the configured primary project folder is on that target branch at the exact integrated SHA;
+- any preexisting primary work was preserved in its recorded preservation worktree;
+- required verification is recorded from commands whose real native exit codes were observed;
+- the task status is INTEGRATED;
 - the integration mutex has been released;
-- important cross-agent decisions/conflict resolutions are in the ledger.
+- important cross-agent decisions and conflict resolutions are in the ledger;
+- task and candidate worktrees have been cleaned with the cleanup command.
 
-Optional cleanup:
+Required cleanup from the primary project folder:
 
 ```bash
 python <skill-root>/scripts/cwa.py --repo <task-worktree> cleanup
 ```
 
-Cleanup is allowed only after the task branch is confirmed integrated and the task worktree is clean.
+Cleanup is required before the agent reports final completion. Run it from the configured primary project folder with the task ID. It removes the integrated task and candidate worktrees and their temporary branches only after ancestry and cleanliness checks pass.
 
 ## What to read when
 

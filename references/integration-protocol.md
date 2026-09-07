@@ -24,20 +24,20 @@ The lock contains `owner.json` with:
 
 ## Begin
 
-`integrate-begin` performs these operations under the lock:
+integrate-begin performs these operations under the lock:
 
-1. Verify the task is `READY_FOR_INTEGRATION`.
+1. Verify the task is READY_FOR_INTEGRATION.
 2. Acquire the mutex.
 3. Verify the target is allowed and in the staging domain.
-4. Locate an existing worktree with the target branch checked out, or create a dedicated one.
-5. Verify that target worktree is clean.
-6. Record the current target SHA as `target_sha_before`.
-7. Create a unique candidate branch from that SHA.
-8. Create a unique candidate worktree.
-9. Merge the task branch into the candidate with a normal merge commit.
-10. Record conflict files or successful merge state.
+4. Inspect the configured primary project folder.
+5. If that primary folder contains preexisting work, reproduce staged, unstaged, and non-tooling untracked state in a preserved worktree and verify the reproduction before clearing the primary folder.
+6. Locate or create the temporary target integration checkout.
+7. Record the current target SHA.
+8. Create the candidate branch and candidate worktree.
+9. Merge the task branch into the candidate.
+10. Record conflicts or successful merge state.
 
-The target branch is not modified during this step.
+The target branch is not advanced during candidate creation. The primary folder is never used as an implementation worktree.
 
 ## Candidate validation
 
@@ -66,19 +66,21 @@ git diff <task-base>...<current-target>
 
 ## Finish
 
-`integrate-finish` checks:
+integrate-finish requires real combined-state verification evidence and checks the candidate, mutex, ancestry, target state, and verification results supplied by the agent.
 
-- lock ownership;
-- no unresolved files;
-- no pending merge without a completed commit;
-- candidate worktree clean;
-- target checkout clean;
-- current target SHA still equals `target_sha_before`;
-- candidate descends from `target_sha_before`.
+After the target is advanced to the validated candidate, integration is still not complete until the helper performs the primary handoff.
 
-Then it fast-forwards the target checkout to the candidate branch.
+The primary handoff guarantees:
 
-This final fast-forward is intentionally simple. All complex merge work already occurred in the candidate.
+- the configured primary project folder ends on the target branch;
+- its HEAD equals the integrated candidate SHA;
+- temporary dedicated target worktrees are detached and removed when CWA created them;
+- preserved preexisting work is attached to its preservation branch in a separate worktree;
+- a handoff failure keeps the integration incomplete instead of falsely reporting success.
+
+The operation is retry-safe when the target ref already equals the validated candidate HEAD after a partially completed finish.
+
+After integrate-finish, the agent must run cleanup from the primary project folder with the task ID before reporting final completion.
 
 ## Target moved unexpectedly
 
@@ -114,3 +116,13 @@ Before breaking it:
 6. prefer user confirmation when evidence is ambiguous.
 
 `lock-break` records an incident. It does not automatically delete candidate worktrees because those may contain valuable conflict resolution work.
+
+## Dirty primary and target recovery
+
+A dirty primary checkout is handled by preservation, not abandonment.
+
+The helper copies and verifies staged, unstaged, and non-tooling untracked work into a dedicated preservation worktree before clearing the primary checkout. It does not use stash and does not discard unknown files.
+
+If exact preservation cannot be verified, integration fails closed before destructive cleanup.
+
+A genuinely dirty target integration checkout that is not the configured primary folder still blocks integration because its ownership is ambiguous. That block is recoverable and must never be treated as task abandonment.
