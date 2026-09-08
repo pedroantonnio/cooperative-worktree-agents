@@ -1,8 +1,8 @@
-﻿# Cooperative Worktree Agents
+# Cooperative Worktree Agents
 
 **Decentralized coordination for parallel Codex CLI agents using isolated Git worktrees, a shared engineering ledger, and intent-aware conflict resolution.**
 
-Cooperative Worktree Agents is a Codex skill for running many independent Codex CLI sessions against the same Git repository at the same time â€” without requiring a central orchestrator.
+Cooperative Worktree Agents is a Codex skill for running many independent Codex CLI sessions against the same Git repository at the same time — without requiring a central orchestrator.
 
 Each terminal owns one task. Each task gets its own branch and Git worktree. Agents work in parallel, publish durable engineering context for one another, and integrate their own completed work through a serialized integration protocol.
 
@@ -28,28 +28,28 @@ Cooperative Worktree Agents addresses these problems without introducing a manda
 
 ```text
                          USER
-                          â”‚
-             â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-             â”‚            â”‚            â”‚
-             â–¼            â–¼            â–¼
+                          │
+             ┌────────────┼────────────┐
+             │            │            │
+             ▼            ▼            ▼
           Codex A      Codex B      Codex C
-             â”‚            â”‚            â”‚
-             â–¼            â–¼            â–¼
+             │            │            │
+             ▼            ▼            ▼
         Worktree A   Worktree B   Worktree C
         task/auth    task/billing task/dashboard
-             â”‚            â”‚            â”‚
-             â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-                          â”‚
-                          â–¼
+             │            │            │
+             └────────────┼────────────┘
+                          │
+                          ▼
                Shared Coordination Ledger
-                          â”‚
-                          â–¼
+                          │
+                          ▼
                   Integration Mutex
-                          â”‚
-                          â–¼
+                          │
+                          ▼
                  Candidate Integration
-                          â”‚
-                          â–¼
+                          │
+                          ▼
                        staging
 ```
 
@@ -97,13 +97,13 @@ Runtime coordination state is stored in the Git common directory:
 
 ```text
 <git-common-dir>/codex-team/
-â”œâ”€â”€ project.json
-â”œâ”€â”€ tasks/
-â”œâ”€â”€ agents/
-â”œâ”€â”€ claims/
-â”œâ”€â”€ decisions/
-â”œâ”€â”€ events/
-â””â”€â”€ locks/
+├── project.json
+├── tasks/
+├── agents/
+├── claims/
+├── decisions/
+├── events/
+└── locks/
 ```
 
 All linked Git worktrees share the same common Git directory, so every agent can see this coordination state without adding it to application commits.
@@ -114,15 +114,15 @@ Conceptually:
 
 ```text
 agents/
-â”œâ”€â”€ A-001/
-â”‚   â”œâ”€â”€ status.json
-â”‚   â””â”€â”€ journal.jsonl
-â”œâ”€â”€ A-002/
-â”‚   â”œâ”€â”€ status.json
-â”‚   â””â”€â”€ journal.jsonl
-â””â”€â”€ A-003/
-    â”œâ”€â”€ status.json
-    â””â”€â”€ journal.jsonl
+├── A-001/
+│   ├── status.json
+│   └── journal.jsonl
+├── A-002/
+│   ├── status.json
+│   └── journal.jsonl
+└── A-003/
+    ├── status.json
+    └── journal.jsonl
 ```
 
 This avoids having many agents concurrently append to one shared Markdown file.
@@ -150,25 +150,25 @@ The directory should contain:
 
 ```text
 cooperative-worktree-agents/
-â”œâ”€â”€ SKILL.md
-â”œâ”€â”€ agents/
-â”‚   â””â”€â”€ openai.yaml
-â”œâ”€â”€ assets/
-â”‚   â””â”€â”€ task-prompt-template.md
-â”œâ”€â”€ scripts/
-â”‚   â”œâ”€â”€ cwa.py
-â”‚   â””â”€â”€ test_cwa.py
-â””â”€â”€ references/
-    â”œâ”€â”€ architecture.md
-    â”œâ”€â”€ claims-and-context.md
-    â”œâ”€â”€ conflict-resolution.md
-    â”œâ”€â”€ examples.md
-    â”œâ”€â”€ integration-protocol.md
-    â”œâ”€â”€ multi-terminal-usage.md
-    â”œâ”€â”€ recovery-and-takeover.md
-    â”œâ”€â”€ shared-ledger.md
-    â”œâ”€â”€ task-lifecycle.md
-    â””â”€â”€ worktrees-and-branches.md
+├── SKILL.md
+├── agents/
+│   └── openai.yaml
+├── assets/
+│   └── task-prompt-template.md
+├── scripts/
+│   ├── cwa.py
+│   └── test_cwa.py
+└── references/
+    ├── architecture.md
+    ├── claims-and-context.md
+    ├── conflict-resolution.md
+    ├── examples.md
+    ├── integration-protocol.md
+    ├── multi-terminal-usage.md
+    ├── recovery-and-takeover.md
+    ├── shared-ledger.md
+    ├── task-lifecycle.md
+    └── worktrees-and-branches.md
 ```
 
 ## Quick start
@@ -216,67 +216,67 @@ A typical task looks like this:
 
 ```text
 assigned
-   â”‚
-   â–¼
+   │
+   ▼
 register task + agent
-   â”‚
-   â–¼
+   │
+   ▼
 create task branch + worktree
-   â”‚
-   â–¼
+   │
+   ▼
 read active peer context
-   â”‚
-   â–¼
+   │
+   ▼
 claim expected areas
-   â”‚
-   â–¼
+   │
+   ▼
 implement
-   â”‚
-   â”œâ”€â”€ publish decisions
-   â”œâ”€â”€ publish interface changes
-   â”œâ”€â”€ publish warnings
-   â””â”€â”€ inspect peers before shared edits
-   â”‚
-   â–¼
+   │
+   ├── publish decisions
+   ├── publish interface changes
+   ├── publish warnings
+   └── inspect peers before shared edits
+   │
+   ▼
 test
-   â”‚
-   â–¼
+   │
+   ▼
 commit
-   â”‚
-   â–¼
+   │
+   ▼
 mark READY
-   â”‚
-   â–¼
+   │
+   ▼
 acquire integration mutex
-   â”‚
-   â–¼
+   │
+   ▼
 create candidate integration worktree
-   â”‚
-   â–¼
+   │
+   ▼
 merge task into candidate
-   â”‚
-   â”œâ”€â”€ clean merge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-   â”‚                              â”‚
-   â””â”€â”€ conflict                   â”‚
-         â”‚                        â”‚
-         â–¼                        â”‚
-   read peer manifests/journals   â”‚
-         â”‚                        â”‚
-         â–¼                        â”‚
-   resolve by intent              â”‚
-         â”‚                        â”‚
-         â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
-                    â”‚
-                    â–¼
+   │
+   ├── clean merge ───────────────┐
+   │                              │
+   └── conflict                   │
+         │                        │
+         ▼                        │
+   read peer manifests/journals   │
+         │                        │
+         ▼                        │
+   resolve by intent              │
+         │                        │
+         └────────────────────────┘
+                    │
+                    ▼
              integration tests
-                    â”‚
-                    â–¼
+                    │
+                    ▼
              advance target
-                    â”‚
-                    â–¼
+                    │
+                    ▼
               release mutex
-                    â”‚
-                    â–¼
+                    │
+                    ▼
                 INTEGRATED
 ```
 
@@ -471,8 +471,8 @@ A correct resolution might preserve both:
 
 ```text
 UserIdentity
-â”œâ”€â”€ OAuth provider identity
-â””â”€â”€ authorization role
+├── OAuth provider identity
+└── authorization role
 ```
 
 rather than simply choosing one side.
@@ -602,28 +602,28 @@ A typical development session might look like:
 
 ```text
 Terminal 1
-â””â”€â”€ Codex
-    â””â”€â”€ Google OAuth
-        â””â”€â”€ task/T001-google-oauth
-            â””â”€â”€ worktree T001
+└── Codex
+    └── Google OAuth
+        └── task/T001-google-oauth
+            └── worktree T001
 
 Terminal 2
-â””â”€â”€ Codex
-    â””â”€â”€ Billing retries
-        â””â”€â”€ task/T002-billing-retries
-            â””â”€â”€ worktree T002
+└── Codex
+    └── Billing retries
+        └── task/T002-billing-retries
+            └── worktree T002
 
 Terminal 3
-â””â”€â”€ Codex
-    â””â”€â”€ Dashboard navigation
-        â””â”€â”€ task/T003-dashboard-navigation
-            â””â”€â”€ worktree T003
+└── Codex
+    └── Dashboard navigation
+        └── task/T003-dashboard-navigation
+            └── worktree T003
 
 Terminal 4
-â””â”€â”€ Codex
-    â””â”€â”€ Email provider migration
-        â””â”€â”€ task/T004-email-provider
-            â””â”€â”€ worktree T004
+└── Codex
+    └── Email provider migration
+        └── task/T004-email-provider
+            └── worktree T004
 ```
 
 All four agents implement concurrently.
@@ -638,18 +638,18 @@ The normal operational hierarchy is:
 
 ```text
 main/master
-    â†‘
-    â”‚ outside normal agent development flow
-    â”‚
+    ↑
+    │ outside normal agent development flow
+    │
 staging
-    â†‘
-    â”‚
+    ↑
+    │
 feature/* or other staging-derived integration targets
-    â†‘
-    â”‚
+    ↑
+    │
 task/*
-    â†‘
-    â”‚
+    ↑
+    │
 task worktrees
 ```
 
@@ -657,10 +657,10 @@ A repository may use a staging-derived target for a specific initiative:
 
 ```text
 staging
-â””â”€â”€ feature/billing
-    â”œâ”€â”€ task/T001-schema
-    â”œâ”€â”€ task/T002-provider
-    â””â”€â”€ task/T003-dashboard
+└── feature/billing
+    ├── task/T001-schema
+    ├── task/T002-provider
+    └── task/T003-dashboard
 ```
 
 The task's target must remain in the authorized staging domain unless the user explicitly overrides that policy.
@@ -717,45 +717,45 @@ It covers scenarios including:
 
 ```text
 cooperative-worktree-agents/
-â”œâ”€â”€ SKILL.md
-â”œâ”€â”€ README.md
-â”œâ”€â”€ LICENSE
-â”œâ”€â”€ CONTRIBUTING.md
-â”œâ”€â”€ agents/
-â”‚   â””â”€â”€ openai.yaml
-â”œâ”€â”€ assets/
-â”‚   â””â”€â”€ task-prompt-template.md
-â”œâ”€â”€ scripts/
-â”‚   â”œâ”€â”€ cwa.py
-â”‚   â””â”€â”€ test_cwa.py
-â””â”€â”€ references/
-    â”œâ”€â”€ architecture.md
-    â”œâ”€â”€ claims-and-context.md
-    â”œâ”€â”€ conflict-resolution.md
-    â”œâ”€â”€ examples.md
-    â”œâ”€â”€ integration-protocol.md
-    â”œâ”€â”€ multi-terminal-usage.md
-    â”œâ”€â”€ recovery-and-takeover.md
-    â”œâ”€â”€ shared-ledger.md
-    â”œâ”€â”€ task-lifecycle.md
-    â””â”€â”€ worktrees-and-branches.md
+├── SKILL.md
+├── README.md
+├── LICENSE
+├── CONTRIBUTING.md
+├── agents/
+│   └── openai.yaml
+├── assets/
+│   └── task-prompt-template.md
+├── scripts/
+│   ├── cwa.py
+│   └── test_cwa.py
+└── references/
+    ├── architecture.md
+    ├── claims-and-context.md
+    ├── conflict-resolution.md
+    ├── examples.md
+    ├── integration-protocol.md
+    ├── multi-terminal-usage.md
+    ├── recovery-and-takeover.md
+    ├── shared-ledger.md
+    ├── task-lifecycle.md
+    └── worktrees-and-branches.md
 ```
 
 ## Documentation
 
 Detailed behavior is documented in:
 
-- [`SKILL.md`](SKILL.md) â€” primary Codex instructions;
-- [`references/architecture.md`](references/architecture.md) â€” architecture and invariants;
-- [`references/task-lifecycle.md`](references/task-lifecycle.md) â€” task state machine;
-- [`references/shared-ledger.md`](references/shared-ledger.md) â€” coordination-state model;
-- [`references/claims-and-context.md`](references/claims-and-context.md) â€” advisory claims and peer awareness;
-- [`references/worktrees-and-branches.md`](references/worktrees-and-branches.md) â€” ownership rules;
-- [`references/integration-protocol.md`](references/integration-protocol.md) â€” mutex and candidate integration;
-- [`references/conflict-resolution.md`](references/conflict-resolution.md) â€” intent-aware merges;
-- [`references/recovery-and-takeover.md`](references/recovery-and-takeover.md) â€” crash recovery and task takeover;
-- [`references/multi-terminal-usage.md`](references/multi-terminal-usage.md) â€” practical parallel workflows;
-- [`references/examples.md`](references/examples.md) â€” end-to-end scenarios.
+- [`SKILL.md`](SKILL.md) — primary Codex instructions;
+- [`references/architecture.md`](references/architecture.md) — architecture and invariants;
+- [`references/task-lifecycle.md`](references/task-lifecycle.md) — task state machine;
+- [`references/shared-ledger.md`](references/shared-ledger.md) — coordination-state model;
+- [`references/claims-and-context.md`](references/claims-and-context.md) — advisory claims and peer awareness;
+- [`references/worktrees-and-branches.md`](references/worktrees-and-branches.md) — ownership rules;
+- [`references/integration-protocol.md`](references/integration-protocol.md) — mutex and candidate integration;
+- [`references/conflict-resolution.md`](references/conflict-resolution.md) — intent-aware merges;
+- [`references/recovery-and-takeover.md`](references/recovery-and-takeover.md) — crash recovery and task takeover;
+- [`references/multi-terminal-usage.md`](references/multi-terminal-usage.md) — practical parallel workflows;
+- [`references/examples.md`](references/examples.md) — end-to-end scenarios.
 
 ## Contributing
 
