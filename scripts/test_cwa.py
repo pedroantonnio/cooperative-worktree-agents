@@ -22,7 +22,14 @@ def load_cwa_module():
 
 
 def run(cmd, cwd=None, check=True):
-    p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+    p = subprocess.run(
+        cmd,
+        cwd=cwd,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        capture_output=True,
+    )
     if check and p.returncode != 0:
         raise AssertionError(f"Command failed: {cmd}\nSTDOUT:\n{p.stdout}\nSTDERR:\n{p.stderr}")
     return p
@@ -173,6 +180,46 @@ def test_git_metadata_permission_guidance():
     assert module.git_failure_guidance(["git", "show", "missing"], ordinary) == ordinary
 
 
+def test_status_preserves_utf8_and_supports_task_filters():
+    with tempfile.TemporaryDirectory(prefix="cwa-utf8-status-") as td:
+        root = Path(td) / "repo"
+        root.mkdir()
+        git(root, "init", "-b", "master")
+        git(root, "config", "user.name", "CWA Test")
+        git(root, "config", "user.email", "cwa@example.invalid")
+        (root / "base.txt").write_text("base\n", encoding="utf-8")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "initial")
+        git(root, "branch", "staging")
+
+        cwa(root, "init", "--target", "staging")
+        _, task = cwa(
+            root,
+            "start",
+            "--title",
+            "Tarefa de revisão — UTF-8",
+            "--objective",
+            "Preservar informação acentuada no ledger",
+            "--claim",
+            "base.txt",
+        )
+
+        human = run(
+            [sys.executable, str(CWA), "--repo", str(root), "status"],
+            check=True,
+        )
+        assert "Tarefa de revisão — UTF-8" in human.stdout
+
+        _, by_task = cwa(root, "status", "--json", "--task", task["task_id"])
+        assert [item["task_id"] for item in by_task["tasks"]] == [task["task_id"]]
+
+        _, by_target = cwa(root, "status", "--json", "--target", "staging")
+        assert [item["task_id"] for item in by_target["tasks"]] == [task["task_id"]]
+
+        _, active = cwa(root, "status", "--json", "--active")
+        assert [item["task_id"] for item in active["tasks"]] == [task["task_id"]]
+
+
 
 def test_dirty_primary_is_parked_and_final_code_returns_to_primary():
     with tempfile.TemporaryDirectory(prefix="cwa-primary-handoff-") as td:
@@ -257,6 +304,9 @@ def test_dirty_primary_is_parked_and_final_code_returns_to_primary():
 
         _, cleaned = cwa(root, "cleanup", "--task", task["task_id"])
         assert cleaned["cleanup_complete"] is True
+        assert len(cleaned["removed_worktrees"]) == 2
+        assert cleaned["removed_branches"]
+        assert cleaned["integration_lock"] is None
         assert not task_wt.exists()
         assert not candidate.exists()
         assert git(root, "branch", "--show-current").stdout.strip() == "staging"
@@ -266,6 +316,7 @@ def test_dirty_primary_is_parked_and_final_code_returns_to_primary():
 def main():
     test_git_metadata_permission_guidance()
     test_full_flow_and_conflict()
+    test_status_preserves_utf8_and_supports_task_filters()
     test_dirty_primary_is_parked_and_final_code_returns_to_primary()
     print(
         "PASS: cooperative worktree flow, primary handoff, dirty-work preservation, "

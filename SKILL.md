@@ -108,6 +108,22 @@ When this happens:
 
 The helper emits explicit recovery guidance when this failure signature is detected.
 
+### Windows encoding and Git metadata preflight
+
+The helper's coordination files, diagnostics, and JSON output are UTF-8. Preserve
+that invariant when invoking it from PowerShell or another terminal:
+
+- do not copy status, titles, paths, or event text after accented characters have
+  been corrupted;
+- if the terminal displays corrupted text, stop and correct the execution
+  encoding before publishing a ledger event;
+- if Git metadata is denied by a managed sandbox, rerun the exact CWA command in
+  the elevated/user-approved execution context described above; never replace
+  `cwa.py` with ad-hoc `git worktree` or direct-checkout operations.
+
+The helper's regression suite includes a non-ASCII task title and must be run
+after changes to its subprocess or output handling.
+
 ### Primary checkout preservation and automatic recovery
 
 The configured primary project folder is the authoritative finished checkout. Task worktrees and candidate worktrees are temporary implementation and integration areas.
@@ -152,6 +168,19 @@ Read the task context and active peers:
 python <skill-root>/scripts/cwa.py --repo <task-worktree> status
 python <skill-root>/scripts/cwa.py --repo <task-worktree> context
 ```
+
+When the ledger contains historical or completed tasks, narrow the view before
+making decisions:
+
+```bash
+python <skill-root>/scripts/cwa.py --repo <task-worktree> status --active
+python <skill-root>/scripts/cwa.py --repo <task-worktree> status --target <target-branch> --json
+python <skill-root>/scripts/cwa.py --repo <task-worktree> status --task <task-id> --json
+```
+
+`--active` excludes terminal tasks (`INTEGRATED` and `ABANDONED`), while
+`--target` and `--task` are exact filters. Use the filtered output when the
+unfiltered ledger is too large to review safely.
 
 When you are about to modify a central/shared file or a path another agent may claim, query it explicitly:
 
@@ -236,6 +265,17 @@ python <skill-root>/scripts/cwa.py --repo <task-worktree> ready \
 ```
 
 Do not claim a test passed unless you observed it pass.
+
+`--test` records evidence; it does not execute the command. Include the exact
+command, its observed native exit code, and the result in each entry, for example:
+
+```text
+command=node --test tests/auth.test.mjs; exit_code=0; result=PASS
+```
+
+Do not use a bare `PASS`, a copied log fragment, or a command that was only
+planned as verification. Record `FAIL` or `BLOCKED` when that is what the
+observed exit code or external dependency produced.
 
 For native commands, observe the real process exit code. In PowerShell, ErrorActionPreference does not by itself turn a failing native executable into a terminating PowerShell error. Agents must inspect the native exit status or use an execution wrapper that fails on a nonzero native exit code. Output text that merely contains a command invocation is not PASS evidence.
 
@@ -376,6 +416,12 @@ python <skill-root>/scripts/cwa.py --repo <task-worktree> cleanup
 ```
 
 Cleanup is required before the agent reports final completion. Run it from the configured primary project folder with the task ID. It removes the integrated task and candidate worktrees and their temporary branches only after ancestry and cleanliness checks pass.
+
+Keep the cleanup result as evidence. A successful cleanup reports
+`cleanup_complete: true`, the removed worktrees and branches, the final target
+HEAD, and a free integration lock (`integration_lock: null`). If the command
+does not produce that confirmation, inspect the exit code and CWA status before
+reporting completion.
 
 ## What to read when
 
