@@ -22,6 +22,24 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SCHEMA_VERSION = 1
 PROTECTED_BRANCHES = {"main", "master"}
+TERMINAL_TASK_STATUSES = {"INTEGRATED", "ABANDONED"}
+
+
+def configure_utf8_stdio() -> None:
+    """Keep CLI diagnostics and JSON output lossless on Windows and POSIX."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="strict")
+        except (OSError, ValueError):
+            # Embedded callers may expose a stream that cannot be reconfigured.
+            # File reads/writes remain explicitly UTF-8 below.
+            continue
+
+
+configure_utf8_stdio()
 
 
 class CWAError(RuntimeError):
@@ -67,7 +85,13 @@ def now_iso() -> str:
 
 def run_git(repo: Path, *args: str, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
     cmd = ["git", "-C", str(repo), *args]
-    p = subprocess.run(cmd, text=True, capture_output=capture)
+    p = subprocess.run(
+        cmd,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        capture_output=capture,
+    )
     if check and p.returncode != 0:
         detail = (p.stderr or p.stdout or "").strip()
         detail = git_failure_guidance(cmd, detail)
@@ -568,7 +592,13 @@ def path_matches(pattern: str, path: str) -> bool:
 def cmd_status(args: argparse.Namespace) -> None:
     repo = resolve_repo(args.repo)
     project = load_project(repo)
-    tasks = list(iter_tasks(repo))
+    tasks = [
+        task
+        for task in iter_tasks(repo)
+        if not args.task or task.get("task_id") == args.task
+        if not args.target or task.get("target_branch") == args.target
+        if not args.active or task.get("status") not in TERMINAL_TASK_STATUSES
+    ]
     lock = read_lock(repo)
     if args.json:
         print(json.dumps({"project": project, "tasks": tasks, "integration_lock": lock}, indent=2))
@@ -578,7 +608,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         print(f"Project objective: {project['project_objective']}")
     print(f"Integration lock: {lock if lock else 'FREE'}")
     if not tasks:
-        print("No registered tasks.")
+        print("No tasks match the selected filters." if (args.task or args.target or args.active) else "No registered tasks.")
         return
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for t in tasks:
@@ -1337,6 +1367,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
         raise CWAError("Task branch is not confirmed as integrated into target.")
 
     removed = []
+    removed_branches = []
 
     record_path = integration_record_path(anchor, task_id)
     if record_path.exists():
@@ -1352,6 +1383,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
             removed.append(str(candidate_wt))
         if candidate_branch and local_branch_exists(anchor, candidate_branch):
             run_git(anchor, "branch", "-d", candidate_branch)
+            removed_branches.append(candidate_branch)
 
     task_wt = Path(task["worktree_path"]).resolve()
     if task_wt.exists():
@@ -1362,6 +1394,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
 
     if local_branch_exists(anchor, task["task_branch"]):
         run_git(anchor, "branch", "-d", task["task_branch"])
+        removed_branches.append(task["task_branch"])
 
     task["cleaned_at"] = now_iso()
     task["cleanup_complete"] = True
@@ -1377,6 +1410,8 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
                 "target_branch": target,
                 "target_head": rev(anchor, "HEAD"),
                 "removed_worktrees": removed,
+                "removed_branches": removed_branches,
+                "integration_lock": read_lock(anchor),
                 "final": "Task lifecycle complete. Final integrated code is in the primary project folder.",
             },
             indent=2,
@@ -1417,6 +1452,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("status", help="Show shared task/lock status")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--active", action="store_true", help="Show only non-terminal tasks")
+    s.add_argument("--task", help="Show only one task id")
+    s.add_argument("--target", help="Show only tasks for one target branch")
     s.set_defaults(func=cmd_status)
 
     s = sub.add_parser("context", help="Show relevant peer tasks and journal events")
