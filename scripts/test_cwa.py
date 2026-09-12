@@ -65,16 +65,9 @@ def test_full_flow_and_conflict():
         (root / "independent.txt").write_text("base\n", encoding="utf-8")
         git(root, "add", ".")
         git(root, "commit", "-m", "initial")
-        git(root, "branch", "staging")
-        master_before = git(root, "rev-parse", "master").stdout.strip()
-
-        # Protected target must be rejected.
-        p, _ = cwa(root, "init", "--target", "master", check=False)
-        assert p.returncode != 0
-
-        # Initialize staging coordination.
-        p, init = cwa(root, "init", "--target", "staging")
-        assert init["default_target"] == "staging"
+        # init defaults to the branch currently checked out.
+        p, init = cwa(root, "init")
+        assert init["default_target"] == "master"
         assert Path(init["state_root"]).exists()
 
         # Task A edits independent file and integrates cleanly.
@@ -83,18 +76,17 @@ def test_full_flow_and_conflict():
         wt_a = Path(a["worktree_path"])
         commit_file(wt_a, "independent.txt", "A\n", "task A")
         cwa(wt_a, "ready", "--test", "unit: PASS")
-        staging_before_a = git(root, "rev-parse", "staging").stdout.strip()
+        target_before_a = git(root, "rev-parse", "master").stdout.strip()
         _, ia = cwa(wt_a, "integrate-begin")
         candidate_a = Path(ia["candidate_worktree"])
-        # staging must still be unchanged while candidate exists.
-        assert git(root, "rev-parse", "staging").stdout.strip() == staging_before_a
+        # target must still be unchanged while candidate exists.
+        assert git(root, "rev-parse", "master").stdout.strip() == target_before_a
         cwa(candidate_a, "integrate-finish", "--test", "integration: PASS")
-        staging_after_a = git(root, "rev-parse", "staging").stdout.strip()
-        assert staging_after_a != staging_before_a
-        assert git(root, "show", "staging:independent.txt").stdout == "A\n"
-        assert git(root, "rev-parse", "master").stdout.strip() == master_before
+        target_after_a = git(root, "rev-parse", "master").stdout.strip()
+        assert target_after_a != target_before_a
+        assert git(root, "show", "master:independent.txt").stdout == "A\n"
 
-        # Start B and C from the same current staging state; both edit shared.txt.
+        # Start B and C from the same current target state; both edit shared.txt.
         _, b = cwa(root, "start", "--title", "Task B", "--objective", "Add B behavior",
                    "--claim", "shared.txt", "--acceptance", "B behavior present")
         _, c = cwa(root, "start", "--title", "Task C", "--objective", "Add C behavior",
@@ -112,15 +104,15 @@ def test_full_flow_and_conflict():
         _, ib = cwa(wt_b, "integrate-begin")
         cand_b = Path(ib["candidate_worktree"])
         cwa(cand_b, "integrate-finish", "--test", "B integration: PASS")
-        assert git(root, "show", "staging:shared.txt").stdout == "base\nB\n"
+        assert git(root, "show", "master:shared.txt").stdout == "base\nB\n"
 
-        # C must now conflict against B in candidate, without damaging staging.
-        staging_before_c = git(root, "rev-parse", "staging").stdout.strip()
+        # C must now conflict against B in candidate, without damaging the target.
+        target_before_c = git(root, "rev-parse", "master").stdout.strip()
         _, ic = cwa(wt_c, "integrate-begin")
         cand_c = Path(ic["candidate_worktree"])
         assert ic["status"] == "CONFLICT"
         assert "shared.txt" in ic["conflict_files"]
-        assert git(root, "rev-parse", "staging").stdout.strip() == staging_before_c
+        assert git(root, "rev-parse", "master").stdout.strip() == target_before_c
         # Context should surface B's work.
         p, ctx = cwa(cand_c, "context", "--path", "shared.txt")
         assert any(t["task_id"] == b["task_id"] for t in ctx["tasks"])
@@ -132,8 +124,7 @@ def test_full_flow_and_conflict():
             "Preserved B behavior while adding C behavior", "--file", "shared.txt")
         # integrate-finish auto-completes MERGE_HEAD commit.
         cwa(cand_c, "integrate-finish", "--test", "B+C integration: PASS")
-        assert git(root, "show", "staging:shared.txt").stdout == "base\nB\nC\n"
-        assert git(root, "rev-parse", "master").stdout.strip() == master_before
+        assert git(root, "show", "master:shared.txt").stdout == "base\nB\nC\n"
 
         # Mutex must be free.
         _, st = cwa(root, "status", "--json")
@@ -190,9 +181,10 @@ def test_status_preserves_utf8_and_supports_task_filters():
         (root / "base.txt").write_text("base\n", encoding="utf-8")
         git(root, "add", ".")
         git(root, "commit", "-m", "initial")
-        git(root, "branch", "staging")
+        git(root, "branch", "feature/current")
 
-        cwa(root, "init", "--target", "staging")
+        cwa(root, "init", "--target", "feature/current")
+        git(root, "switch", "master")
         _, task = cwa(
             root,
             "start",
@@ -204,6 +196,8 @@ def test_status_preserves_utf8_and_supports_task_filters():
             "base.txt",
         )
 
+        assert task["target_branch"] == "master"
+
         human = run(
             [sys.executable, str(CWA), "--repo", str(root), "status"],
             check=True,
@@ -213,7 +207,7 @@ def test_status_preserves_utf8_and_supports_task_filters():
         _, by_task = cwa(root, "status", "--json", "--task", task["task_id"])
         assert [item["task_id"] for item in by_task["tasks"]] == [task["task_id"]]
 
-        _, by_target = cwa(root, "status", "--json", "--target", "staging")
+        _, by_target = cwa(root, "status", "--json", "--target", "master")
         assert [item["task_id"] for item in by_target["tasks"]] == [task["task_id"]]
 
         _, active = cwa(root, "status", "--json", "--active")
@@ -231,10 +225,10 @@ def test_dirty_primary_is_parked_and_final_code_returns_to_primary():
         (root / "base.txt").write_text("base\n", encoding="utf-8")
         git(root, "add", ".")
         git(root, "commit", "-m", "initial")
-        git(root, "branch", "staging")
-        git(root, "switch", "staging")
+        git(root, "branch", "feature/current")
+        git(root, "switch", "feature/current")
 
-        _, init = cwa(root, "init", "--target", "staging")
+        _, init = cwa(root, "init", "--target", "feature/current")
         assert Path(init["primary_worktree"]).resolve() == root.resolve()
 
         _, task = cwa(
@@ -288,7 +282,7 @@ def test_dirty_primary_is_parked_and_final_code_returns_to_primary():
 
         assert finish["status"] == "INTEGRATED"
         assert Path(finish["primary_worktree"]).resolve() == root.resolve()
-        assert git(root, "branch", "--show-current").stdout.strip() == "staging"
+        assert git(root, "branch", "--show-current").stdout.strip() == "feature/current"
         assert git(root, "rev-parse", "HEAD").stdout.strip() == finish["integrated_sha"]
         assert git(root, "show", "HEAD:feature.txt").stdout == "integrated\n"
         assert git(root, "status", "--porcelain").stdout == ""
@@ -309,7 +303,7 @@ def test_dirty_primary_is_parked_and_final_code_returns_to_primary():
         assert cleaned["integration_lock"] is None
         assert not task_wt.exists()
         assert not candidate.exists()
-        assert git(root, "branch", "--show-current").stdout.strip() == "staging"
+        assert git(root, "branch", "--show-current").stdout.strip() == "feature/current"
         assert git(root, "show", "HEAD:feature.txt").stdout == "integrated\n"
 
 

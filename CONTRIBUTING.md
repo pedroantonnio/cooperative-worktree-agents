@@ -1,4 +1,4 @@
-﻿# Contributing
+# Contributing
 
 Contributions are welcome.
 
@@ -11,7 +11,7 @@ Please preserve the core design:
 - serialized integration;
 - candidate integration before advancing the target;
 - intent-aware conflict resolution;
-- staging-derived operational integration targets.
+- current-branch and explicitly selected integration targets.
 
 Before submitting changes to the helper, run:
 

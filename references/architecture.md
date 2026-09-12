@@ -10,7 +10,7 @@ The system separates three concerns:
 
 1. **Parallel implementation** — each task has its own branch and worktree.
 2. **Shared awareness** — agents publish durable context into a common ledger stored in the Git common directory.
-3. **Serialized integration** — only one task at a time may advance a shared staging-domain target.
+3. **Serialized integration** — only one task at a time may advance a shared target branch.
 
 ## Mental model
 
@@ -34,7 +34,7 @@ The system separates three concerns:
           integration mutex
                  │
                  ▼
-          staging-domain target
+          target branch
 ```
 
 ## Invariants
@@ -75,9 +75,9 @@ Conflict markers are insufficient evidence. Resolve from task objectives, accept
 
 If two tasks encode incompatible user requirements, the agent must not invent which requirement wins. Report the semantic conflict.
 
-### I10. `main` and `master` are outside the normal operational domain
+### I10. The active branch is the default target
 
-The default target is `staging`. A target may also be a local branch whose history descends from `staging`. Do not implement or integrate into `main`/`master` unless the user explicitly overrides this repository policy.
+When a task starts, the helper records the local branch currently checked out as that task's integration target unless `--target` explicitly selects another local branch. `main`, `master`, feature branches, release branches, and other local branches are treated uniformly. An already-running task keeps its recorded target even if the primary checkout later switches branches.
 
 ## Why a common Git directory
 
@@ -107,7 +107,7 @@ One shared append-only file looks simple but becomes its own concurrency hotspot
 
 ## Why candidate integration
 
-Merging directly into `staging` means a conflict can leave the authoritative integration checkout in an unresolved state. A candidate worktree isolates that risk.
+Merging directly into the target branch means a conflict can leave the authoritative integration checkout in an unresolved state. A candidate worktree isolates that risk.
 
 The protocol is:
 

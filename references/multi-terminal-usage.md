@@ -43,13 +43,13 @@ The user can decide what to launch and when. The ledger provides enough shared s
 Good task prompt:
 
 ```text
-Use cooperative-worktree-agents. Implement Google OAuth end-to-end while preserving existing password login. Own this task completely: create your worktree, coordinate with active peer agents, test, commit, and integrate into staging. Resolve compatible conflicts yourself using the shared ledger.
+Use cooperative-worktree-agents. Implement Google OAuth end-to-end while preserving existing password login. Own this task completely: create your worktree, coordinate with active peer agents, test, commit, and integrate back into the branch that was active when the task started. Resolve compatible conflicts yourself using the shared ledger.
 ```
 
 Another:
 
 ```text
-Use cooperative-worktree-agents. Replace our email delivery adapter with Resend. Work independently in your own worktree, publish decisions/interfaces that can affect peers, and integrate the finished task into staging.
+Use cooperative-worktree-agents. Replace our email delivery adapter with Resend. Work independently in your own worktree, publish decisions/interfaces that can affect peers, and integrate the finished task back into its recorded target branch.
 ```
 
 ## Terminal that starts outside a task worktree

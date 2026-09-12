@@ -2,7 +2,7 @@
 
 ## Example 1: independent tasks with no conflict
 
-Three terminals start from `staging`:
+Three terminals start from the same currently active target branch:
 
 ```text
 A -> Google OAuth
@@ -12,9 +12,9 @@ C -> Dashboard charts
 
 All create separate worktrees and work concurrently.
 
-C finishes first, acquires the integration mutex, creates a candidate, validates, and advances `staging`.
+C finishes first, acquires the integration mutex, creates a candidate, validates, and advances the recorded target branch.
 
-A finishes next. Its candidate starts from the newer `staging` containing C. No overlapping files exist, so integration succeeds.
+A finishes next. Its candidate starts from the newer target branch containing C. No overlapping files exist, so integration succeeds.
 
 B integrates last.
 

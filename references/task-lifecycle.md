@@ -56,7 +56,7 @@ A task registration captures:
 - title;
 - objective;
 - acceptance criteria;
-- staging-domain target;
+- recorded target branch;
 - exact base SHA;
 - task branch;
 - worktree path;

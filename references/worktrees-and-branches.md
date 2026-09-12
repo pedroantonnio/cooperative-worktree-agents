@@ -7,7 +7,7 @@ Each active task owns exactly one task branch and one primary task worktree.
 Example:
 
 ```text
-staging
+active target branch
 ├── task/t-001-google-oauth      -> worktree A
 ├── task/t-002-billing-webhooks  -> worktree B
 └── task/t-003-dashboard         -> worktree C
@@ -15,22 +15,14 @@ staging
 
 ## Base selection
 
-The task base must be the integration target relevant to that task.
+The task base is the integration target recorded when the task starts.
 
-Allowed normal targets:
+By default, the helper uses the local branch currently checked out when `start` is invoked. Any existing local branch is valid, including `main`, `master`, `develop`, feature branches, and release branches.
 
-- `staging`;
-- `feature/*`, `integration/*`, or another local branch whose history descends from `staging`.
+Use `--target <branch>` only when the task should intentionally integrate into a different local branch.
 
-The helper rejects `main` and `master` as normal targets.
+The target is fixed in the task manifest at start time. Switching the primary checkout later does not silently retarget an existing task.
 
-A staging-derived target is valid only if:
-
-```bash
-git merge-base --is-ancestor staging <target>
-```
-
-succeeds.
 
 ## Exact base SHA
 

@@ -17,5 +17,5 @@ Own this task independently from start to finish:
 - run relevant verification and commit the task;
 - acquire the integration mutex and integrate through a candidate worktree;
 - resolve compatible conflicts yourself using both tasks' manifests, journals, diffs, and acceptance criteria;
-- validate the merged candidate and advance the staging-domain target;
+- validate the merged candidate and advance the recorded target branch;
 - report any genuine semantic/product conflict instead of inventing which requirement wins.

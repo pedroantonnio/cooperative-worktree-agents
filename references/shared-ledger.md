@@ -55,7 +55,7 @@ A task manifest is durable shared truth about one task. Typical fields:
     "Google sign-in works end to end",
     "Password login still works"
   ],
-  "target_branch": "staging",
+  "target_branch": "feature/current",
   "base_sha": "...",
   "task_branch": "task/t-4f82a13c-add-google-oauth",
   "worktree_path": "...",

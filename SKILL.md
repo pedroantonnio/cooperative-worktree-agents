@@ -1,6 +1,6 @@
 ---
 name: cooperative-worktree-agents
-description: Coordinate many independent Codex CLI agents working concurrently in the same Git repository. Use when the user wants multiple terminals or agents to execute separate coding tasks in parallel, each in its own Git worktree and task branch, while sharing a cross-agent coordination ledger, soft file/area claims, decision and intent logs, serialized integration, and intent-aware merge-conflict resolution into staging or staging-derived branches. Also use when an agent must safely take over, inspect, integrate, or resolve conflicts with work produced by other independent agents.
+description: Coordinate many independent Codex CLI agents working concurrently in the same Git repository. Use when the user wants multiple terminals or agents to execute separate coding tasks in parallel, each in its own Git worktree and task branch, while sharing a cross-agent coordination ledger, soft file/area claims, decision and intent logs, serialized integration, and intent-aware merge-conflict resolution back into each task's recorded target branch. Also use when an agent must safely take over, inspect, integrate, or resolve conflicts with work produced by other independent agents.
 ---
 
 # Cooperative Worktree Agents
@@ -16,8 +16,8 @@ The core operating model is:
 - file/area claims are advisory, not exclusive;
 - integration into the shared target is serialized by one integration mutex;
 - merge conflicts are resolved from both tasks' intent, contracts, diffs, and acceptance criteria, not from conflict markers alone;
-- the shared operational target is `staging` or a branch derived from `staging`;
-- `main` and `master` are outside the normal operational domain unless the user explicitly overrides that repository policy.
+- each new task normally uses the branch currently checked out when the task starts as its integration target;
+- `main`, `master`, feature branches, release branches, and other local branches are all valid targets.
 
 The user's explicit instructions take precedence over this skill. Do not let a generic skill rule override a clear task-specific instruction from the user.
 
@@ -28,7 +28,7 @@ When assigned a coding task in a repository where other Codex agents may be acti
 1. Discover the Git repository and shared coordination state.
 2. Read the project objective, active tasks, relevant claims, and peer notes before making broad or shared changes.
 3. Register yourself as an independent agent and register the task.
-4. Create a dedicated task branch and worktree from the correct staging-domain target.
+4. Create a dedicated task branch and worktree from the branch currently checked out when the task starts, unless the user explicitly selected another target.
 5. Do all implementation work only in that task worktree.
 6. Publish concise operational context while working: intent, decisions, interfaces/contracts, touched areas, risks, tests, and integration concerns.
 7. Never publish hidden chain-of-thought or private scratch reasoning. Record only durable engineering rationale and facts useful to another agent.
@@ -64,10 +64,10 @@ Prefer the deterministic helper script bundled with this skill.
 From any checkout/worktree belonging to the repository, initialize the team state if it does not already exist:
 
 ```bash
-python <skill-root>/scripts/cwa.py init --target staging
+python <skill-root>/scripts/cwa.py init
 ```
 
-If the repository uses a staging-derived integration target for the current initiative, keep the project root target as `staging` and pass the more specific target when starting the task.
+Initialization records shared coordination state. At task start, the default integration target is the branch currently checked out. Use `--target <branch>` only for an intentional override.
 
 To start a task:
 
@@ -75,7 +75,6 @@ To start a task:
 python <skill-root>/scripts/cwa.py start \
   --title "Add Google OAuth" \
   --objective "Allow users to authenticate with Google without breaking password login" \
-  --target staging \
   --claim "src/auth/**" \
   --claim "src/pages/login/**" \
   --acceptance "Google sign-in works end to end" \
@@ -296,7 +295,7 @@ python <skill-root>/scripts/cwa.py --repo <task-worktree> integrate-begin
 This command:
 
 - acquires the integration mutex atomically;
-- verifies the target is in the staging domain;
+- verifies the recorded target is an existing local branch;
 - finds or creates a dedicated checkout for the target branch;
 - refuses to proceed if the target checkout is dirty;
 - snapshots the current target SHA;

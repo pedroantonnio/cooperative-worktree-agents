@@ -50,7 +50,7 @@ Cooperative Worktree Agents addresses these problems without introducing a manda
                  Candidate Integration
                           │
                           ▼
-                       staging
+                  recorded target branch
 ```
 
 ## Core principles
@@ -67,8 +67,8 @@ Cooperative Worktree Agents addresses these problems without introducing a manda
 - Merge conflicts are resolved from the intent of both tasks, not conflict markers alone.
 - Semantically compatible objectives should both survive a conflict resolution.
 - True requirement conflicts are escalated rather than guessed.
-- `staging`, or a branch derived from `staging`, is the normal operational integration domain.
-- `main` and `master` are outside the normal development workflow unless the user explicitly overrides that repository policy.
+- The branch currently checked out when a task starts is its normal integration target.
+- `main`, `master`, feature branches, release branches, and other local branches are valid targets.
 
 ## What agents share
 
@@ -132,7 +132,7 @@ This avoids having many agents concurrently append to one shared Markdown file.
 - Git
 - Python 3
 - Codex CLI
-- A repository with a `staging` branch, or another staging-derived integration target explicitly selected for the task
+- A Git repository with a local branch checked out for the work being coordinated
 
 The helper is cross-platform and is intended to work on Windows, macOS, and Linux.
 
@@ -176,7 +176,7 @@ cooperative-worktree-agents/
 Initialize coordination state once from a checkout belonging to the repository:
 
 ```bash
-python <skill-root>/scripts/cwa.py init --target staging
+python <skill-root>/scripts/cwa.py init
 ```
 
 Then open as many terminals as you need.
@@ -187,7 +187,7 @@ Then open as many terminals as you need.
 Use cooperative-worktree-agents.
 
 Implement Google OAuth authentication.
-Integrate the completed task into staging.
+Integrate the completed task back into its recorded target branch.
 ```
 
 ### Terminal B
@@ -196,7 +196,7 @@ Integrate the completed task into staging.
 Use cooperative-worktree-agents.
 
 Implement subscription billing.
-Integrate the completed task into staging.
+Integrate the completed task back into its recorded target branch.
 ```
 
 ### Terminal C
@@ -205,7 +205,7 @@ Integrate the completed task into staging.
 Use cooperative-worktree-agents.
 
 Redesign the dashboard navigation.
-Integrate the completed task into staging.
+Integrate the completed task back into its recorded target branch.
 ```
 
 Each Codex session follows the same protocol independently.
@@ -288,7 +288,6 @@ The bundled helper can register a new task and create its branch/worktree:
 python <skill-root>/scripts/cwa.py start \
   --title "Add Google OAuth" \
   --objective "Allow users to authenticate with Google without breaking password login" \
-  --target staging \
   --claim "src/auth/**" \
   --claim "src/pages/login/**" \
   --acceptance "Google sign-in works end to end" \
@@ -628,7 +627,7 @@ Terminal 4
 
 All four agents implement concurrently.
 
-When an agent finishes, it waits for or acquires the integration mutex, integrates its own task against the latest staging state, resolves any conflicts using the shared ledger, validates, and releases the mutex.
+When an agent finishes, it waits for or acquires the integration mutex, integrates its own task against the latest state of its recorded target branch, resolves any conflicts using the shared ledger, validates, and releases the mutex.
 
 There is no mandatory global orchestrator.
 
@@ -637,33 +636,17 @@ There is no mandatory global orchestrator.
 The normal operational hierarchy is:
 
 ```text
-main/master
-    ↑
-    │ outside normal agent development flow
-    │
-staging
-    ↑
-    │
-feature/* or other staging-derived integration targets
-    ↑
-    │
-task/*
-    ↑
-    │
-task worktrees
+active local target branch
+    |
+    +-- task/*
+    |    +-- isolated task worktrees
+    |
+    +-- temporary candidate integration worktrees
 ```
 
-A repository may use a staging-derived target for a specific initiative:
+A repository may coordinate work from any local branch, including `main`, `master`, feature branches, release branches, or other initiative branches. The branch currently checked out when `start` runs is selected by default; `--target <branch>` is an explicit override.
 
-```text
-staging
-└── feature/billing
-    ├── task/T001-schema
-    ├── task/T002-provider
-    └── task/T003-dashboard
-```
-
-The task's target must remain in the authorized staging domain unless the user explicitly overrides that policy.
+Each task records its target branch when it starts. Switching the primary checkout later does not silently retarget an existing task.
 
 ## Why not one central orchestrator?
 
@@ -769,7 +752,7 @@ Please preserve the project's core properties:
 - advisory claims instead of broad file locking;
 - serialized integration;
 - intent-aware conflict handling;
-- staging-domain safety.
+- local-target branch safety.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 

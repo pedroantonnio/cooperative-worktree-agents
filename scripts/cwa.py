@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SCHEMA_VERSION = 1
-PROTECTED_BRANCHES = {"main", "master"}
 TERMINAL_TASK_STATUSES = {"INTEGRATED", "ABANDONED"}
 
 
@@ -200,16 +199,21 @@ def rev(repo: Path, ref: str) -> str:
 
 
 def ensure_safe_target(repo: Path, target: str) -> None:
-    if target in PROTECTED_BRANCHES:
-        raise CWAError(f"Protected target '{target}' is outside the normal staging domain.")
+    if not target:
+        raise CWAError("Target branch is empty.")
     if not local_branch_exists(repo, target):
         raise CWAError(f"Target branch does not exist locally: {target}")
-    if target != "staging":
-        if not local_branch_exists(repo, "staging"):
-            raise CWAError("Local 'staging' branch is required to validate a staging-derived target.")
-        p = run_git(repo, "merge-base", "--is-ancestor", "staging", target, check=False)
-        if p.returncode != 0:
-            raise CWAError(f"Target '{target}' is not derived from local 'staging'.")
+
+
+def selected_target(repo: Path, explicit_target: Optional[str]) -> str:
+    target = explicit_target or current_branch(repo)
+    if not target:
+        raise CWAError(
+            "No target branch was specified and the current checkout is detached. "
+            "Switch to a local branch or pass --target explicitly."
+        )
+    ensure_safe_target(repo, target)
+    return target
 
 
 def ensure_dirs(root: Path) -> None:
@@ -224,7 +228,7 @@ def project_path(repo: Path) -> Path:
 def load_project(repo: Path) -> Dict[str, Any]:
     p = project_path(repo)
     if not p.exists():
-        raise CWAError("Coordination state is not initialized. Run 'cwa.py init --target staging'.")
+        raise CWAError("Coordination state is not initialized. Run 'cwa.py init' from the branch you want to use.")
     return read_json(p)
 
 
@@ -447,17 +451,17 @@ def dirty_target_error(repo: Path) -> CWAError:
 
 def cmd_init(args: argparse.Namespace) -> None:
     repo = resolve_repo(args.repo)
-    project = init_project(repo, args.target, args.objective, args.worktree_root)
+    target = selected_target(repo, args.target)
+    project = init_project(repo, target, args.objective, args.worktree_root)
     print(json.dumps({"state_root": str(state_root(repo)), **project}, indent=2))
 
 
 def cmd_start(args: argparse.Namespace) -> None:
     repo = resolve_repo(args.repo)
+    target = selected_target(repo, args.target)
     if not project_path(repo).exists():
-        init_project(repo, args.target or "staging", None, None)
+        init_project(repo, target, None, None)
     project = load_project(repo)
-    target = args.target or project["default_target"]
-    ensure_safe_target(repo, target)
 
     task_id = short_id("T")
     agent_id = short_id("A")
@@ -1425,7 +1429,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     s = sub.add_parser("init", help="Initialize shared coordination state")
-    s.add_argument("--target", default="staging")
+    s.add_argument("--target")
     s.add_argument("--objective")
     s.add_argument("--worktree-root")
     s.set_defaults(func=cmd_init)

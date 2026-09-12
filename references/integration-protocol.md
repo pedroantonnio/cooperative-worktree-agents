@@ -28,7 +28,7 @@ integrate-begin performs these operations under the lock:
 
 1. Verify the task is READY_FOR_INTEGRATION.
 2. Acquire the mutex.
-3. Verify the target is allowed and in the staging domain.
+3. Verify the recorded target is an existing local branch.
 4. Inspect the configured primary project folder.
 5. If that primary folder contains preexisting work, reproduce staged, unstaged, and non-tooling untracked state in a preserved worktree and verify the reproduction before clearing the primary folder.
 6. Locate or create the temporary target integration checkout.
